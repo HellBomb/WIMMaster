@@ -1,6 +1,6 @@
 #Requires -Version 5.0
 Param (
-    [String]$Iso      = "C:\Elevation\SW_DVD9_Win_Server_STD_CORE_2016_64Bit_English_-4_DC_STD_MLF_X21-70526.ISO",
+    [String]$Iso      = "",
     [String]$FinalWim = "",
     [Switch]$CreateConfigFile,
     [Switch]$OverwriteWIM
