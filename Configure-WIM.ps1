@@ -1,7 +1,9 @@
 #Requires -Version 5.0
 Param (
-    [String]$Iso      = "D:\WinSvr19.iso",
-    [String]$FinalWim = ""
+    [String]$Iso      = "C:\Elevation\SW_DVD9_Win_Server_STD_CORE_2016_64Bit_English_-4_DC_STD_MLF_X21-70526.ISO",
+    [String]$FinalWim = "",
+    [Switch]$CreateConfigFile,
+    [Switch]$OverwriteWIM
 )
 
 Begin {
@@ -10,81 +12,61 @@ Begin {
     <#
         .SYNOPSIS
             Standardized & Easy to use logging function.
-
         .DESCRIPTION
             Easy and highly functional logging function that can be dropped into any script to add logging capability without hindering script performance.
-
         .PARAMETER type
             Set the event level of the log event. 
-
             [Options]
                 Info, Warning, Error, Debug
         
         .PARAMETER message
             Set the message text for the event.
-
-
         .PARAMETER ErrorCode
             Set the Error code for Error & fatal level events. The error code will be displayed in front of 
             the message text for the event.
-
         .PARAMETER WriteHost
             Force writing to host reguardless of SetWriteLog setting for this specific instance.
-
         .PARAMETER WriteLog
             Force writing to log reguardless of SetWriteLog setting for this specific instance.
-
         .PARAMETER SetLogLevel
             Set the log level for the nLog function for all future calls. When setting a log level all logs at 
             the defined level will be logged. If you set the log level to warning (default) warning messages 
             and all events above that such as error and fatal will also be logged. 
-
             (1) Debug: Used to document events & actions within the script at a very detailed level. This level 
             is normally used during script debugging or development and is rarely set once a script is put into
             production
-
             (2) Information: Used to document normal application behavior and milestones that may be useful to 
             keep track of such. (Ex. File(s) have been created/removed, script completed successfully, etc)
-
             (3) Warning: Used to document events that should be reviewed or might indicate there is possibly
             unwanted behavior occuring.
-
             (4) Error: Used to document non-fatal errors indicating something within the script has failed.
-
             (5) Fatal: Used to document errors significant enough that the script cannot continue. When fatal
             errors are called with this function the script will terminate. 
         
             [Options]
                 1,2,3,4,5
-
         .PARAMETER SetLogFile
             Set the fully quallified path to the log file you want used. If not defined, the log will use the 
             "$Env:SystemDrive\ProgramData\Scripts\Logs" directory and will name the log file the same as the 
             script name. 
-
         .PARAMETER SetWriteHost
             Configure if the script should write events to the screen. (Default: $False)
-
             [Options]
                 $True,$False
         
         .PARAMETER SetWriteLog
             Configure if the script should write events to the screen. (Default: $True)
-
             [Options]
                 $True,$False
         
         .INPUTS
             None
-
         .OUTPUTS
             None
-
         .NOTES
         VERSION     DATE			NAME						DESCRIPTION
 	    ___________________________________________________________________________________________________________
 	    1.0         25 May 2020		HellBomb					Initial version
-
         Credits:
             (1) Script Template: https://gist.github.com/9to5IT/9620683
     #>
@@ -274,6 +256,7 @@ Begin {
 
         If ($Debug) {
             Write-nLog -SetLogLevel 1 -SetWriteHost $True -SetWriteLog $FALSE -Type Debug -Message "Debugging enabled"
+            $OverwriteWIM = $True
         }
     }
 
@@ -310,17 +293,41 @@ Begin {
         Write-nLog -Type Fatal -Message "Failed to mount windows ISO. ($ISO)"
     }
 
-    $WIMFile   = (Get-ChildItem -Path "$($ISOVolume.DriveLetter):\Sources\" |Where-Object {$_.Name -match "install.(wim|esd)"}).fullname
-    $FinalWIM  = "$OutDir\$([io.path]::GetFileName($WIMFile))"
-    Try {
-        Write-nLog -Type Debug -Message "Attempting to copy install.WIM. (Source: $WIMFile) (Desination: $FinalWim)"
-        Copy-Item -Path $WIMFile -Destination $FinalWim -Force -PassThru |Set-ItemProperty -name IsReadOnly -Value $FALSE
-        Write-nLog -Type Info -Message "Successfully copied install.wim to working directory."
-    } Catch {
-        Write-nLog -Type Fatal -Message "Failed to copy install.wim to working directory. (Source: $WIMFile) (Desination: $FinalWim)"
+    #Determine which WIM files we need.
+    IF ($CreateConfigFile) { 
+        $WIMS = Get-ChildItem -Path "$($ISOVolume.DriveLetter):\Sources\" |Where-Object {$_.Name -match "(install)" -AND $_.extension -match "(wim|esd)"}
+    } Else {
+        $WIMS = Get-ChildItem -Path "$($ISOVolume.DriveLetter):\Sources\" |Where-Object {$_.Name -match "(install|boot)" -AND $_.extension -match "(wim|esd)"}
     }
 
-    $XMLPath   = "$OutDir\$((Get-ShortestString -Array (Get-WindowsImage -ImagePath $FinalWim |foreach {$_.ImageName})).replace(' ','_'))`.xml"
+    #Copy needed WIM files from source to destination.
+    ForEach ($WIM in $WIMS) {
+        New-Variable -Name "$($WIM.BaseName)WIM" -Value "$OutDir\$($WIM.name)" -ErrorAction Stop -Force
+
+        Try {
+            IF ([System.IO.File]::Exists("$OutDir\$($WIM.name)") -AND $OverwriteWIM -EQ $False) {
+                Write-nLog -Type Info -Message "Existing $($_.name) already exists in output and `$OverwriteWIM set to `$False. Renaming existing file to $($WIM.BaseName)$(([DateTime]::Now).ToString("hh-mm-tt-ddMMMyy"))$($_.extension)"
+                Rename-Item -Path "$OutDir\$($_.name)" -NewName "$($WIM.BaseName)$(([DateTime]::Now).ToString("hh-mm-tt-ddMMMyy"))$($WIM.extension)"
+            } Else {
+                Write-nLog -Type Info -Message "Existing $($WIM.name) already exists in output and `$OverwriteWIM set to `$True so overwriting existing file. "
+            }
+        } Catch {
+            Write-nLog -Type Error -Message "Unable to rename '$($WIM.name)' to '$($WIM.BaseName)$(([DateTime]::Now).ToString("hh-mm-tt-ddMMMyy"))$($WIM.extension)'."
+        }
+
+        Try {
+            Write-nLog -Type Debug -Message "Attempting to copy $($WIM.name). (Source: $($WIM.FullName) (Desination: $OutDir\$($WIM.name))"
+            Copy-Item -Path $WIM.FullName -Destination "$OutDir\$($WIM.name)" -ErrorAction Stop -Force -PassThru | Set-ItemProperty -name IsReadOnly -Value $FALSE -Force
+            Write-nLog -Type Info -Message "Successfully copied $($WIM.name) to working directory."
+        } Catch {
+            Write-nLog -Type Fatal -Message "Failed to copy $($WIM.name) to working directory. (Source: $($WIM.FullName) (Desination: $OutDir\$($WIM.name))"
+        }
+    }
+    
+    $XMLPath   = "$OutDir\$((Get-ShortestString -Array (Get-WindowsImage -ImagePath $InstallWIM |foreach {$_.ImageName})).replace(' ','_'))`.xml"
+    IF ([String]::IsNullOrEmpty($XMLPath)) {
+        Write-nLog -Type Fatal -Message "unable to determine XML file name"
+    }
 }
 
 Process {
@@ -333,10 +340,32 @@ Process {
     }
 
     IF ($CreateConfigFile) {
-        Mount-WindowsImage -Path $MountDir -Index 1 -ImagePath $FinalWIM
+        Mount-WindowsImage -Path $MountDir -Index 1 -ImagePath $InstallWIM -ReadOnly |Out-Null
         
+        #Create Basic Folder structure
+        Write-nLog -Type Info -Message "Creating required directories."
+        $RequiredFolders = @("$OutDir\Drivers","$OutDir\Updates","$OutDir\Updates\ServicingStackUpdates","$OutDir\Updates\CumulativeUpdates")
+        ForEach ($Folder in $RequiredFolders) {
+            IF ([System.IO.Directory]::Exists($Folder)) {
+                Write-nLog -Type debug -Message "Directory already exists. Directory$Folder"
+            } Else {
+                Try {
+                    Write-nLog -Type Info -Message "Creating new $([System.io.path]::GetDirectoryName($Folder)) directory. "
+                    New-Item -Path $Folder -ItemType Directory -Force -OutVariable $Null
+                    Write-nLog -Type Debug -Message "Successfully created new directory. (Directory: $Folder)"
+                } Catch {
+                    Write-nLog -Type Warning -Message "Failed to create new directory. (Directory: $Folder)"
+                }
+            }
+        }
+
+
+        $XmlWriterSettings = New-Object System.Xml.XmlWriterSettings
+        $XmlWriterSettings.Indent = $True
+        $XmlWriterSettings.IndentChars = "    "
+
         # Set the File Name Create The Document
-        $XmlWriter = [System.XML.XmlWriter]::Create($XMLPath, $xmlsettings)
+        $XmlWriter = [System.XML.XmlWriter]::Create($XMLPath, $XmlWriterSettings)
 
         # Write the XML Decleration and set the XSL
         $xmlWriter.WriteStartDocument()
@@ -365,7 +394,7 @@ Process {
 
 
             $xmlWriter.WriteStartElement("WindowsImage")
-                ForEach ($Index in (Get-WindowsImage -ImagePath "D:\Desktop\install.wim")) {
+                ForEach ($Index in (Get-WindowsImage -ImagePath $InstallWIM)) {
                     $xmlWriter.WriteStartElement("index")
                         $xmlWriter.WriteAttributeString("Index",$Index.ImageIndex)
                         $xmlWriter.WriteAttributeString("ImageName",$Index.ImageName)
@@ -376,7 +405,7 @@ Process {
 
 
             $xmlWriter.WriteStartElement("WindowsOptionalFeature")
-                ForEach ($Feature in (Get-WindowsOptionalFeature -Path "C:\Users\HellBomb\AppData\Local\Temp\8698f481-e867-499f-9666-6428326c5332")) {
+                ForEach ($Feature in (Get-WindowsOptionalFeature -Path $MountDir)) {
                     $xmlWriter.WriteStartElement("Feature")
                         $xmlWriter.WriteAttributeString("FeatureName",$Feature.FeatureName)
                         $xmlWriter.WriteAttributeString("State",$Feature.State)
@@ -387,7 +416,7 @@ Process {
 
 
             $xmlWriter.WriteStartElement("WindowsCapability")
-                ForEach ($Capability in (Get-WindowsCapability -Path "C:\Users\HellBomb\AppData\Local\Temp\8698f481-e867-499f-9666-6428326c5332" | Where-Object {$_.State -eq "Installed"})) {
+                ForEach ($Capability in (Get-WindowsCapability -Path $MountDir| Where-Object {$_.State -eq "Installed"})) {
                     $xmlWriter.WriteStartElement("Capability")
                         $xmlWriter.WriteAttributeString("FeatureName",$Capability.Name)
                         $xmlWriter.WriteAttributeString("Remove","$False")
@@ -402,17 +431,30 @@ Process {
         $xmlWriter.Flush()
         $xmlWriter.Close()
 
-        Dismount-WindowsImage -Path $MountDir -Discard
+        Dismount-WindowsImage -Path $MountDir -Discard  |Out-Null
 
     } Else { #End CreateConfigFile
+        IF ([System.IO.File]::Exists($XMLPath)) {
+            Try {
+                [XML]$XMLFile   = Get-Content $XMLPath
+                If ([String]::IsNullOrEmpty($XMLPath)) {
+                    Write-nLog -Type Error -Message "XML file is empty. (File: $XMLPath)"
+                } Else {
+                    Write-nLog -Type Debug -Message "Successfully read contents of XML config file (File: $XMLPath)"
+                }
 
-        [XML]$XMLFile   = Get-Content $XMLPath
-        $WIMImages = Get-WindowsImage -ImagePath $FinalWIM
+            } Catch {
+                Write-nLog -Type Error -Message "XML file located, but unable to read file. (File: $XMLPath)"
+            }
+        } Else {
+            Write-nLog -Type Fatal -Message "Required XML file does not exist. (File: $XMLPath)"
+        }
+        $WIMImages = Get-WindowsImage -ImagePath $InstallWIM
 
         ForEach ($Index in $WIMImages) {
             IF ($XMLFile.WIMMaster.WindowsImage.index.Where({$_.ImageName -eq $Index.ImageName -AND $_.remove -eq $True})) {
                 Try {
-                    Remove-WindowsImage -ImagePath $FinalWIM -Name $Index.ImageName |Out-Null
+                    Remove-WindowsImage -ImagePath $InstallWIM -Name $Index.ImageName |Out-Null
                     Write-nLog -Type Info -Message "Successfully removed image. ($($Index.ImageName))"
                     Continue
                 } Catch {
@@ -422,11 +464,11 @@ Process {
 
             #Mount the WIM file
             Try {
-                Mount-WindowsImage -Path $MountDir -ImagePath $FinalWim -Name $Index.ImageName -ErrorAction Stop |Out-Null
+                Mount-WindowsImage -Path $MountDir -ImagePath $InstallWIM -Name $Index.ImageName -ErrorAction Stop |Out-Null
                 Write-nLog -Type Info -Message "Successfully Mounted Image. (Image Name: $($Index.imageName))"
-                Write-nLog -Type Debug -Message "Successfully Mounted Image. (ImageName: $($Index.imageName)) (ImagePath: $FinalWIM) (Path: '$MountDir')"
+                Write-nLog -Type Debug -Message "Successfully Mounted Image. (ImageName: $($Index.imageName)) (ImagePath: $InstallWIM) (Path: '$MountDir')"
             } Catch {
-                Write-nLog -Type Warning -Message "Failed to mount image. (Index: $($Index.imageName)) (ImagePath: $FinalWIM) (Path: '$MountDir')"
+                Write-nLog -Type Warning -Message "Failed to mount image. (Index: $($Index.imageName)) (ImagePath: $InstallWIM) (Path: '$MountDir')"
             }
 
             #Configure Optional Features
@@ -458,20 +500,86 @@ Process {
                     }
                 }
             }
+            
+            #Apply Updates
+            IF ($XMLFile.WIMMaster.ScriptConfig.ImageProcessing.ImportUpdates -eq "True") {
+                If ([System.IO.Directory]::Exists("$ScriptDir\ServicingStackUpdates")) {
+                    Write-nLog -Type Info -Message "Importing Servicing Stack Updates"
+                    Get-ChildItem -Path "$ScriptDir\ServicingStackUpdates" -Recurse |Where {$_.Extension -match "msu|cab"} |ForEach-Object {
+                        Add-WindowsPackage -PackagePath $_.FullName -Path $MountDir
+                    }
+                    If ([System.IO.Directory]::Exists("$ScriptDir\Updates")) {
+                        Write-nLog -Type Info -Message "Importing Updates"
+                        Get-ChildItem -Path "$ScriptDir\Updates" -Recurse |Where {$_.Extension -match "msu|cab"} |ForEach-Object {
+                            Add-WindowsPackage -PackagePath $_.FullName -Path $MountDir
+                        }
+                    } Else {
+                        Write-nLog -Type Warning -Message "Unable to locate Servicing Stack Updates folder. (Directory: $ScriptDir\ServicingStackUpdates)"
+                    }
+                } Else {
+                    Write-nLog -Type Warning -Message "Unable to locate Servicing Stack Updates folder. (Directory: $ScriptDir\ServicingStackUpdates)"
+                }
+            }
 
-            #Dismount WIM file
+            IF ($XMLFile.WIMMaster.ScriptConfig.ImageProcessing.ImportDrivers -eq "True") {
+                If ([System.IO.Directory]::Exists("$ScriptDir\Drivers")) {
+                    Write-nLog -Type Info -Message "Importing Drivers"
+                    Add-WindowsDriver -Recurse -Driver "$ScriptDir\Drivers" -Path $MountDir
+                } Else {
+                    Write-nLog -Type Warning -Message "Unable to locate drivers folder. (Directory: $ScriptDir\Updates)"
+                }
+                If ([System.IO.Directory]::Exists("$ScriptDir\Drivers")) {
+                    Write-nLog -Type Info -Message "Importing Drivers"
+                    Add-WindowsDriver -Recurse -Driver "$ScriptDir\Drivers" -Path $MountDir
+                } Else {
+                    Write-nLog -Type Warning -Message "Unable to locate drivers folder. (Directory: $ScriptDir\Updates)"
+                }
+            }
+
+            #Dismount InstallWIM file
             Try {
                 Dismount-WindowsImage -Save -Path $MountDir |Out-Null
                 Write-nLog -Type Info -Message "Successfully dismounted image. ($($Index.ImageName))"
             } Catch {
-                Write-nLog -Type Fatal -Message "Failed to Remove '$($_.FeatureName)."
+                Write-nLog -Type Fatal -Message "Failed to dismount image. ($($Index.ImageName))"
             }
         }
+
+        #Mount BootWIM and inject Drivers
+        Try {
+            Mount-WindowsImage -Path $MountDir -ImagePath $BootWIM -Name $Index.ImageName -ErrorAction Stop |Out-Null
+            Write-nLog -Type Info -Message "Successfully Mounted Image. (Image Name: $($Index.imageName))"
+            Write-nLog -Type Debug -Message "Successfully Mounted Image. (ImageName: $($Index.imageName)) (ImagePath: $BootWIM) (Path: '$MountDir')"
+        } Catch {
+            Write-nLog -Type Warning -Message "Failed to mount image. (Index: $($Index.imageName)) (ImagePath: $BootWIM) (Path: '$MountDir')"
+        }
+
+        IF ($XMLFile.WIMMaster.ScriptConfig.ImageProcessing.ImportDrivers -eq "True") {
+            If ([System.IO.Directory]::Exists("$ScriptDir\Drivers")) {
+                Write-nLog -Type Info -Message "Importing Drivers"
+                Add-WindowsDriver -Recurse -Driver "$ScriptDir\Drivers" -Path $MountDir
+            } Else {
+                Write-nLog -Type Warning -Message "Unable to locate drivers folder. (Directory: $ScriptDir\Updates)"
+            }
+            If ([System.IO.Directory]::Exists("$ScriptDir\Drivers")) {
+                Write-nLog -Type Info -Message "Importing Drivers"
+                Add-WindowsDriver -Recurse -Driver "$ScriptDir\Drivers" -Path $MountDir
+            } Else {
+                Write-nLog -Type Warning -Message "Unable to locate drivers folder. (Directory: $ScriptDir\Updates)"
+            }
+        }
+
+        Try {
+            Dismount-WindowsImage -Save -Path $MountDir |Out-Null
+            Write-nLog -Type Info -Message "Successfully dismounted image. ($($Index.ImageName))"
+        } Catch {
+            Write-nLog -Type Fatal -Message "Failed to dismount image. ($($Index.ImageName))"
+        }
+
     }
 }
 
 End {
-
     #Dismount ISO now that we are done copying needed files from it.
     Write-nLog -Type Info -Message "Dismounting `$ISO"
     $Dismount = Dismount-DiskImage $ISO
@@ -484,10 +592,10 @@ End {
         "Iso","FinalWim"
 
         #Begin
-        "ScriptDir","ISEDebug","IsAdmin","Readhost","Dir","OutDir","DiskImage","ISOVolume","WIMFile","FinalWIM","XMLPath"
+        "ScriptDir","ISEDebug","IsAdmin","Readhost","Dir","OutDir","DiskImage","ISOVolume","WIMFile","WIMS","WIM","installWIM","BootWIM","XMLPath"
 
         #Process
-        "MountDir","XMLFile","WIMImages",
+        "XmlWriterSettings","xmlWriter","MountDir","XMLFile","WIMImages",
 
         #End
         "Dismount"
